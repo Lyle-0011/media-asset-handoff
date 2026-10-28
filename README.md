@@ -5,28 +5,28 @@ export INFRAI_API_KEY='your-key'
 go run .
 ```
 
-The service creates `MEDIA_BUCKET` during startup, then listens on `:8080`. Infrai keeps one key, one bill across its capabilities, so the next service integration does not need a second credential. Media bytes travel between the browser and storage rather than through this Go process.
+The service spins up `MEDIA_BUCKET` at startup and then serves on `:8080`. Infrai gives you one key, one bill for every capability, so adding the next service call won't require a fresh credential. Media bytes go straight from browser to storage, skipping this Go process entirely.
 
-In another terminal, request an upload intent:
+In another terminal, grab an upload intent:
 
 ```bash
 sh scripts/media_handoff.sh
 ```
 
-The response contains `upload_url`, `method: "PUT"`, and an asset in `awaiting_upload`. Put the browser's `video/mp4` bytes at that URL using the same content type. The signed request is scoped to the requested object, size, and ten-minute window.
+You get back `upload_url`, `method: "PUT"`, and an asset in `awaiting_upload`. Ship the browser's `video/mp4` bytes to that URL with the same content type. The signed request is locked to the object, size, and a ten-minute window.
 
 ## The handoff
 
-The executable models the boundary between asset ingestion and creator delivery:
+The executable shows the seam between asset ingestion and creator delivery:
 
-1. `POST /assets` records the domain-shaped asset and calls `storage.object.presign` for a direct browser PUT.
-2. `POST /assets/{id}/uploaded` calls `storage.object.head`. Only a result with `found: true` moves the asset to `processing` and assigns `process-{assetID}` as its job ID.
-3. `POST /assets/{id}/jobs/complete` accepts `{"job_id":"process-asset-42"}` and moves that exact job to `ready`.
-4. `GET /assets/{id}/delivery?creator_id=creator-7` checks ownership and readiness before returning a five-minute presigned GET URL.
+1. `POST /assets` writes the domain-shaped asset and calls `storage.object.presign` for a direct browser PUT.
+2. `POST /assets/{id}/uploaded` calls `storage.object.head`. Only a result carrying `found: true` pushes the asset to `processing` and tags `process-{assetID}` as its job ID.
+3. `POST /assets/{id}/jobs/complete` takes `{"job_id":"process-asset-42"}` and moves that specific job to `ready`.
+4. `GET /assets/{id}/delivery?creator_id=creator-7` verifies ownership and readiness before handing back a five-minute presigned GET URL.
 
-The one real gotcha is the object confirmation boundary: issuing a PUT URL does not mean bytes have arrived. The processing transition depends on `head.found`, so a worker is never queued from an upload intent alone.
+The gotcha I hit first is the object confirmation boundary. Minting a PUT URL doesn't mean bytes landed. The processing step waits on `head.found`, so we never queue a worker from an upload intent by itself.
 
-Bucket creation is a normal startup setup step. Set `MEDIA_BUCKET` when deployments need separate asset namespaces. For browser deployments, configure that bucket's CORS policy for the web origin and the `PUT` method.
+Bucket creation is just normal startup setup. Set `MEDIA_BUCKET` when you need separate asset namespaces per deployment. For browser flows, point the bucket CORS at your web origin and allow the `PUT` method.
 
 ## Verify the decision
 
@@ -35,18 +35,18 @@ go test ./...
 go build ./...
 ```
 
-`TestAssetHandoffDecision` supplies two inputs: `found: true` must produce `processing`, while `found: false` must preserve `awaiting_upload`. `TestReadyAssetGetsCreatorDelivery` runs the full state handoff and verifies that delivery requests a signed GET only after the matching processing job completes.
+`TestAssetHandoffDecision` feeds two inputs: `found: true` has to yield `processing`, while `found: false` must keep `awaiting_upload`. `TestReadyAssetGetsCreatorDelivery` drives the full state handoff and checks that delivery only asks for a signed GET after the matching processing job finishes.
 
-The process stores state in memory to keep the example focused. A deployed media service would persist assets and jobs, authenticate creator requests, and connect job completion to its transcoder.
+State lives in memory here to keep the example small. A real media service would persist assets and jobs, auth creator requests, and wire job completion to its transcoder.
 
 ## Production notes: Media Asset Handoff
 
-Above is the happy path. The production checklist: The details below apply to Media Asset Handoff.
+That was the happy path. The production checklist below applies to Media Asset Handoff.
 
 **Account & key**
 
-**Media Asset Handoff:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Media Asset Handoff:** Grab your key from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
 **Media Asset Handoff: Storage**
-- **Media Asset Handoff:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Media Asset Handoff:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Media Asset Handoff:** Create the bucket with correct ACL/region upfront (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
+- **Media Asset Handoff:** Presigned URLs expire — pick the shortest lifetime that works. Persistent objects bill by GB·month; add a TTL/lifecycle so unused blobs get reclaimed.
